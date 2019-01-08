@@ -1,0 +1,283 @@
+https://developer.mozilla.org/zh-CN/docs/Web/API/WebRTC_API/Signaling_and_video_calling
+
+视频通话在线示例：https://appr.tc
+创建房间，等待其他用户加入(时间可能有点长，耐心等待，且房间容纳2人)。
+
+WebRTC允许实时断对端的媒体交换，通过信令发现和协商。一下构建双向视频通话。
+
+信令服务器
+在两台设备之间建立WebRTC连接需要信令服务器来解决网络连接问题。
+
+信令 聊天服务器
+利用WebSocket API创建的聊天服务器
+
+chatserver.js
+
+function sendToOneUser(target, msgString){
+	var isUnique = true;
+	var i;
+
+	for (i=0, i<connectionArray.length; i++){
+		if(connectionArray[i].username === target){
+		connectionArray[i].sendUTF(msgString);
+		break;
+		}
+	}
+}
+
+设计信令协议
+
+交换会话描述
+
+{
+	type:"video-offer/video-answer";
+	name:"caller-name";
+	target:"callee-name";
+	sdp:{};
+}
+
+交换ICE(交互连接创建)候选设备
+
+{
+	type:"new-ice-candidate";
+	target:"user";
+	candidate:"";
+}
+
+信令处理流程
+
+ICE候选交换过程
+
+客户端应用
+
+HTML
+
+<div>
+	<video id="receive_video" autoplay></video>
+	<video id="local_video" autoplay muted></video>
+	<button id="hangup" onclick="hangUpCall();" disabled>
+		Hang Up
+	</button>
+</div>
+
+JavaScript
+
+function sendToServer(msg){
+	var msgJSON = JSON.stringify(msg);
+
+	connection.send(msgJSON);
+}
+
+开始呼叫的用户界面
+
+function handleUserlistMsg(msg){
+	var i;
+	var listElem = document.getElementById("userlistbox");
+	while(listElem.firstChild){
+	listElem.removeChild(listElem.firstChild);
+	}
+
+	for(i=0;i<msg.users.length;i++){
+	var item = document.createElement("li");
+	item.appendChid(document.createTextNode(msg.user[i]));
+	item.addEventListenter("click",invite,false);
+
+	listElem.appendChild(item);
+	}
+}
+
+呼叫执行
+
+var mediaConstraints = {
+	audio:true,
+	video:true
+};
+
+function invite(evt){
+	if(myPeerConnection){
+	alert("you have one open.");
+	}else{
+	var clickedUsername = evt.target.textContent;
+
+	if(clickedUsername === myUsername){
+	alert("you can't talk to youself.");
+	return;
+	}
+
+	targetUsername = clickedUsername;
+
+	createPeerConnection();
+
+	navigator.mediaDevices.getUserMedia(mediaConstraints)
+	.then(function(localStream){
+	document.getElementById("local_video").srcObject = localStream;
+	myPeerConnection.addStream(localStream);
+	})
+	.catch(handleGetUserMediaError);
+
+	}
+}
+
+处理设备调用错误
+function handleGetUserMediaError(e){
+	switch(e.name){
+		case "NotFonudError":
+			alert("camera or microphone were not found.");
+			break;
+		case "SecurityError":
+		case "PermissionDeniedError":
+			break;
+		default:
+			alert("Error opening.")
+			break;
+	}
+
+	closeVideoCall();
+}
+
+创建peer连接
+
+var myHostname = window.location.hostname;
+
+function createPeerConnection(){
+	myPeerConnection = new RTCPeerConnection({
+		iceServers:[
+			{
+				urls:"turn:"+myHostname,
+				username:"webrtc",
+				credential:"turnserver"
+			}
+		]
+	});
+
+	//添加事件处理
+	myPeerConnection.onicecandidate = handleICECandidateEvent;
+	myPeerConnection.onaddstream = handleAddStreamEvent;
+	myPeerConnection.oniceconnetionstatechage  = handle......
+	myPeerConnection.onicegatheringstatechange = .....
+	myPeerConnection.onsignlingstatechange = ....
+	myPeerConnection.onnegotiationneeded = .....
+	//https://developer.mozilla.org/zh-CN/docs/Web/API/RTCPeerConnection
+}
+
+开始谈判
+
+function handleNegotiationNeededEvent() {
+  myPeerConnection.createOffer().then(function(offer) {
+    return myPeerConnection.setLocalDescription(offer);
+  })
+  .then(function() {
+    sendToServer({
+      name: myUsername,
+      target: targetUsername,
+      type: "video-offer",
+      sdp: myPeerConnection.localDescription
+    });
+  })
+  .catch(reportError);
+}
+
+会话谈判
+
+function handleVideoOfferMsg(msg) {
+  var localStream = null;
+
+  targetUsername = msg.name;
+
+  createPeerConnection();
+
+  var desc = new RTCSessionDescription(msg.sdp);
+
+  myPeerConnection.setRemoteDescription(desc).then(function () {
+    return navigator.mediaDevices.getUserMedia(mediaConstraints);
+  })
+  .then(function(stream) {
+    localStream = stream;
+
+    document.getElementById("local_video").srcObject = localStream;
+    return myPeerConnection.addStream(localStream);
+  })
+  .then(function() {
+    return myPeerConnection.createAnswer();
+  })
+  .then(function(answer) {
+    return myPeerConnection.setLocalDescription(answer);
+  })
+  .then(function() {
+    var msg = {
+      name: myUsername,
+      target: targetUsername,
+      type: "video-answer",
+      sdp: myPeerConnection.localDescription
+    };
+
+    sendToServer(msg);
+  })
+  .catch(handleGetUserMediaError);
+}
+
+发送ICE候选人
+
+function handleICECandidateEvent(event) {
+  if (event.candidate) {
+    sendToServer({
+      type: "new-ice-candidate",
+      target: targetUsername,
+      candidate: event.candidate
+    });
+  }
+}
+
+接收ICE候选人
+
+function handleNewICECandidateMsg(msg) {
+  var candidate = new RTCIceCandidate(msg.candidate);
+
+  myPeerConnection.addIceCandidate(candidate)
+    .catch(reportError);
+}
+
+接收数据流
+
+function handleAddStreamEvent(event) {
+  document.getElementById("received_video").srcObject = event.stream;
+  document.getElementById("hangup-button").disabled = false;
+}
+
+处理移除数据流
+
+function handleRemoveStreamEvent(event) {
+  closeVideoCall();
+}
+
+结束通话
+
+function closeVideoCall() {
+  var remoteVideo = document.getElementById("received_video");
+  var localVideo = document.getElementById("local_video");
+
+  if (myPeerConnection) {
+    if (remoteVideo.srcObject) {
+      remoteVideo.srcObject.getTracks().forEach(track => track.stop());
+      remoteVideo.srcObject = null;
+    }
+
+    if (localVideo.srcObject) {
+      localVideo.srcObject.getTracks().forEach(track => track.stop());
+      localVideo.srcObject = null;
+    }
+
+    myPeerConnection.close();
+    myPeerConnection = null;
+  }
+
+  document.getElementById("hangup-button").disabled = true;
+
+  targetUsername = null;
+}
+
+语音视频聊天室
+https://webrtc-from-chat.glitch.me/
+
+https://github.com/mdn/samples-server/tree/master/s/webrtc-from-chat
+
